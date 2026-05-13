@@ -2,7 +2,7 @@ const path = require('path');
 const zlib = require('zlib');
 const fs = require('fs');
 
-const outputDir = 'www/community/hacs-compatibility-auditor-card';
+const outputDir = 'dist';
 
 class GzipPlugin {
   apply(compiler) {
@@ -49,6 +49,11 @@ module.exports = {
   },
   optimization: {
     minimize: true,
+    minimizer: [
+      new (require('terser-webpack-plugin'))({
+        extractComments: false,
+      }),
+    ],
   },
   plugins: [new GzipPlugin()],
 };

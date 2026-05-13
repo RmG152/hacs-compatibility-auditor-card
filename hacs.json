@@ -1,6 +1,6 @@
 {
   "name": "HACS Compatibility Auditor Card",
-  "filename": "/hacs-compatibility-auditor-card.js",
+  "filename": "dist/hacs-compatibility-auditor-card.js",
   "homeassistant": "2026.5.0",
   "render_readme": true
 }
