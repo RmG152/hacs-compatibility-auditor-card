@@ -15,6 +15,7 @@ export interface HacsPackageResult {
   manifest_ha_requirement: string;
   last_checked: string;
   error: string;
+  reason: string;
   repository_url?: string;
 }
 
@@ -51,6 +52,7 @@ export interface CardConfig {
   show_summary?: boolean;
   show_filters?: boolean;
   show_issues?: boolean;
+  show_reason?: boolean;
   compact?: boolean;
   title?: string;
 }

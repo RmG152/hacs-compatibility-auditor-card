@@ -43,6 +43,7 @@ export class HacsCompatibilityAuditorCard extends LitElement {
       show_summary: true,
       show_filters: true,
       show_issues: true,
+      show_reason: true,
       compact: false,
     };
   }
@@ -73,6 +74,7 @@ export class HacsCompatibilityAuditorCard extends LitElement {
       show_summary: config.show_summary ?? true,
       show_filters: config.show_filters ?? true,
       show_issues: config.show_issues ?? true,
+      show_reason: config.show_reason ?? true,
       compact: config.compact ?? false,
       title: config.title ?? 'HCA',
     };
@@ -116,6 +118,7 @@ export class HacsCompatibilityAuditorCard extends LitElement {
           manifest_ha_requirement: attrs.manifest_ha_requirement || '',
           last_checked: attrs.last_checked || '',
           error: attrs.error || '',
+          reason: attrs.reason || '',
           repository_url: attrs.repository_url || '',
         });
       }
@@ -414,6 +417,7 @@ export class HacsCompatibilityAuditorCard extends LitElement {
             <ha-icon
               icon=${this._getStatusIcon(pkg.status)}
               style="color: ${this._getStatusColor(pkg.status)}"
+              title=${this.config?.show_reason && pkg.reason ? pkg.reason : ''}
             ></ha-icon>
           </div>
           <div class="package-info">
@@ -459,6 +463,12 @@ export class HacsCompatibilityAuditorCard extends LitElement {
               ${pkg.compatible_with_next === true ? 'Sí' : pkg.compatible_with_next === false ? 'No' : 'Desconocido'}
             </span>
           </div>
+          ${this.config?.show_reason && pkg.reason ? html`
+            <div class="detail-row reason">
+              <span class="detail-label">Razón:</span>
+              <span class="detail-value">${pkg.reason}</span>
+            </div>
+          ` : ''}
           ${pkg.manifest_ha_requirement ? html`
             <div class="detail-row">
               <span class="detail-label">Requisito HA (manifest):</span>
@@ -807,6 +817,23 @@ export class HacsCompatibilityAuditorCard extends LitElement {
 
       .detail-value.error {
         color: var(--error-color, #f44336);
+      }
+
+      .detail-row.reason {
+        grid-column: 1 / -1;
+        background: var(--secondary-background-color, #f5f5f5);
+        padding: 6px 8px;
+        border-radius: 4px;
+        align-items: flex-start;
+      }
+
+      .detail-row.reason .detail-label {
+        white-space: nowrap;
+      }
+
+      .detail-row.reason .detail-value {
+        font-style: italic;
+        line-height: 1.4;
       }
 
       .issues-section {
