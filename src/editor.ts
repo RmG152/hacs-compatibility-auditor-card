@@ -79,6 +79,14 @@ export class HacsCompatibilityAuditorCardEditor
           ></ha-switch>
         </ha-formfield>
 
+        <ha-formfield label="Mostrar razón">
+          <ha-switch
+            id="show_reason"
+            .checked=${this._config.show_reason !== false}
+            @change=${this._valueChanged}
+          ></ha-switch>
+        </ha-formfield>
+
         <ha-formfield label="Compacto">
           <ha-switch
             id="compact"
