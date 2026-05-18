@@ -87,6 +87,14 @@ export class HacsCompatibilityAuditorCardEditor
           ></ha-switch>
         </ha-formfield>
 
+        <ha-formfield label="Mostrar indicador IA">
+          <ha-switch
+            id="show_ai_indicator"
+            .checked=${this._config.show_ai_indicator !== false}
+            @change=${this._valueChanged}
+          ></ha-switch>
+        </ha-formfield>
+
         <ha-formfield label="Compacto">
           <ha-switch
             id="compact"

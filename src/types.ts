@@ -17,6 +17,11 @@ export interface HacsPackageResult {
   error: string;
   reason: string;
   repository_url?: string;
+  ai_verdict: string | null;
+  ai_confidence: number | null;
+  ai_reasoning: string;
+  ai_provider: string;
+  ai_analysis: Record<string, any> | null;
 }
 
 export interface GitHubIssue {
@@ -53,6 +58,7 @@ export interface CardConfig {
   show_filters?: boolean;
   show_issues?: boolean;
   show_reason?: boolean;
+  show_ai_indicator?: boolean;
   compact?: boolean;
   title?: string;
 }

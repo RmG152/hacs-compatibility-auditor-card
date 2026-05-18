@@ -44,6 +44,7 @@ export class HacsCompatibilityAuditorCard extends LitElement {
       show_filters: true,
       show_issues: true,
       show_reason: true,
+      show_ai_indicator: true,
       compact: false,
     };
   }
@@ -75,6 +76,7 @@ export class HacsCompatibilityAuditorCard extends LitElement {
       show_filters: config.show_filters ?? true,
       show_issues: config.show_issues ?? true,
       show_reason: config.show_reason ?? true,
+      show_ai_indicator: config.show_ai_indicator ?? true,
       compact: config.compact ?? false,
       title: config.title ?? 'HCA',
     };
@@ -120,6 +122,11 @@ export class HacsCompatibilityAuditorCard extends LitElement {
           error: attrs.error || '',
           reason: attrs.reason || '',
           repository_url: attrs.repository_url || '',
+          ai_verdict: attrs.ai_verdict ?? null,
+          ai_confidence: attrs.ai_confidence ?? null,
+          ai_reasoning: attrs.ai_reasoning ?? '',
+          ai_provider: attrs.ai_provider ?? '',
+          ai_analysis: attrs.ai_analysis ?? null,
         });
       }
     }
@@ -207,6 +214,13 @@ export class HacsCompatibilityAuditorCard extends LitElement {
       case 'ignored': return 'var(--disabled-text-color, #9e9e9e)';
       default: return 'var(--state-icon-color, #9e9e9e)';
     }
+  }
+
+  private _getAiConfidenceLevel(confidence: number | null): { level: string; color: string } | null {
+    if (confidence === null || confidence === undefined) return null;
+    if (confidence >= 0.7) return { level: 'high', color: 'var(--success-color, #4caf50)' };
+    if (confidence >= 0.4) return { level: 'medium', color: 'var(--warning-color, #ff9800)' };
+    return { level: 'low', color: 'var(--error-color, #f44336)' };
   }
 
   private _getTypeLabel(type: string): string {
@@ -425,6 +439,7 @@ export class HacsCompatibilityAuditorCard extends LitElement {
             <span class="package-repo">${pkg.repository}</span>
           </div>
           <div class="package-meta">
+            ${this.config?.show_ai_indicator !== false ? this._renderAiIndicator(pkg) : ''}
             <span class="package-type-badge">${this._getTypeLabel(pkg.type)}</span>
             <span class="package-version">${pkg.installed_version || '—'}</span>
             ${isReviewed ? html`<ha-icon icon="mdi:eye-check" class="reviewed-badge"></ha-icon>` : ''}
@@ -436,6 +451,27 @@ export class HacsCompatibilityAuditorCard extends LitElement {
 
         ${isExpanded ? this._renderPackageDetails(pkg, isIgnored) : ''}
       </div>
+    `;
+  }
+
+  private _renderAiIndicator(pkg: HacsPackageResult): TemplateResult {
+    const aiLevel = this._getAiConfidenceLevel(pkg.ai_confidence);
+    if (!aiLevel) {
+      return html`
+        <span class="ai-indicator ai-none" title="Sin análisis IA">
+          <ha-icon icon="mdi:robot-off"></ha-icon>
+        </span>
+      `;
+    }
+    const pct = Math.round(pkg.ai_confidence! * 100);
+    const label = aiLevel.level === 'high' ? 'Confianza alta'
+      : aiLevel.level === 'medium' ? 'Confianza media'
+      : 'Confianza baja';
+    return html`
+      <span class="ai-indicator ai-${aiLevel.level}" title="IA: ${pct}% — ${label}">
+        <ha-icon icon="mdi:robot"></ha-icon>
+        <span class="ai-dot" style="background: ${aiLevel.color}"></span>
+      </span>
     `;
   }
 
@@ -486,6 +522,34 @@ export class HacsCompatibilityAuditorCard extends LitElement {
             <span class="detail-value">${pkg.last_checked || '—'}</span>
           </div>
         </div>
+
+        ${this.config?.show_ai_indicator !== false && pkg.ai_verdict ? html`
+          <div class="ai-section">
+            <h4>Análisis IA</h4>
+            <div class="ai-details">
+              <div class="ai-row">
+                <span class="detail-label">Veredicto:</span>
+                <span class="detail-value ai-verdict-${pkg.ai_verdict}">${pkg.ai_verdict === 'affected' ? 'Afectado' : pkg.ai_verdict === 'not_affected' ? 'No afectado' : 'Incierto'}</span>
+              </div>
+              <div class="ai-row">
+                <span class="detail-label">Confianza:</span>
+                <span class="detail-value">${pkg.ai_confidence !== null ? `${Math.round(pkg.ai_confidence * 100)}%` : '—'}</span>
+              </div>
+              ${pkg.ai_provider ? html`
+                <div class="ai-row">
+                  <span class="detail-label">Proveedor:</span>
+                  <span class="detail-value">${pkg.ai_provider}</span>
+                </div>
+              ` : ''}
+              ${pkg.ai_reasoning ? html`
+                <div class="ai-row reasoning">
+                  <span class="detail-label">Razonamiento:</span>
+                  <span class="detail-value">${pkg.ai_reasoning}</span>
+                </div>
+              ` : ''}
+            </div>
+          </div>
+        ` : ''}
 
         ${this.config?.show_issues && pkg.issues_relevant.length > 0 ? html`
           <div class="issues-section">
@@ -959,6 +1023,91 @@ export class HacsCompatibilityAuditorCard extends LitElement {
 
       .empty p {
         margin: 0;
+      }
+
+      .ai-indicator {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        position: relative;
+      }
+
+      .ai-indicator ha-icon {
+        --mdi-icon-size: 14px;
+        opacity: 0.6;
+      }
+
+      .ai-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        display: inline-block;
+        flex-shrink: 0;
+      }
+
+      .ai-indicator.ai-none ha-icon {
+        opacity: 0.25;
+      }
+
+      .ai-indicator.ai-none .ai-dot {
+        display: none;
+      }
+
+      .ai-section {
+        margin-top: 12px;
+        padding-top: 8px;
+        border-top: 1px solid var(--divider-color);
+      }
+
+      .ai-section h4 {
+        margin: 0 0 8px;
+        font-size: 0.9em;
+        font-weight: 500;
+      }
+
+      .ai-details {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .ai-row {
+        display: flex;
+        gap: 4px;
+        align-items: flex-start;
+      }
+
+      .ai-row .detail-label {
+        white-space: nowrap;
+      }
+
+      .ai-row.reasoning {
+        background: var(--secondary-background-color, #f5f5f5);
+        padding: 6px 8px;
+        border-radius: 4px;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .ai-row.reasoning .detail-value {
+        font-style: italic;
+        line-height: 1.4;
+        font-size: 0.85em;
+      }
+
+      .ai-verdict-affected {
+        color: var(--error-color, #f44336);
+        font-weight: 600;
+      }
+
+      .ai-verdict-not_affected {
+        color: var(--success-color, #4caf50);
+        font-weight: 600;
+      }
+
+      .ai-verdict-uncertain {
+        color: var(--warning-color, #ff9800);
+        font-weight: 600;
       }
     `;
   }
