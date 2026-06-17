@@ -21,12 +21,14 @@ import type {
   FilterStatus,
   FilterType,
   GitHubIssue,
+  IssueCategoryResult,
   LovelaceCardEditor,
 } from './types';
+import type { HomeAssistant } from './types';
 
 @customElement('hacs-compatibility-auditor-card')
 export class HacsCompatibilityAuditorCard extends LitElement {
-  @property({ attribute: false }) public hass?: any;
+  @property({ attribute: false }) public hass?: HomeAssistant;
   @property({ attribute: false }) public config?: CardConfig;
 
   @state() private _filterStatus: FilterStatus = 'all';
@@ -35,6 +37,10 @@ export class HacsCompatibilityAuditorCard extends LitElement {
   @state() private _expandedPackage: string | null = null;
   @state() private _ignoredPackages: Set<string> = new Set();
   @state() private _reviewedPackages: Set<string> = new Set();
+  @state() private _aiAnalyzing = false;
+  @state() private _aiAnalyzeAllRunning = false;
+  @state() private _packageLoading: Map<string, boolean> = new Map();
+  @state() private _packageAiLoading: Map<string, boolean> = new Map();
 
   private _data?: CompatibilityData;
 
@@ -92,18 +98,14 @@ export class HacsCompatibilityAuditorCard extends LitElement {
   private _updateData(): void {
     if (!this.hass) return;
 
-    const domain = 'hacs_compatibility_auditor';
-    const incompatibleEntity = this.config?.entity_incompatible
-      || `sensor.hca_hacs_incompatible_count`;
-    const totalEntity = this.config?.entity_packages_total
-      || `sensor.hca_hacs_packages_total`;
-    const haVersionEntity = this.config?.entity_ha_version
-      || `sensor.hca_ha_version_current`;
+    const incompatibleEntity = this.config?.entity_incompatible || 'sensor.hca_hacs_incompatible_count';
+    const totalEntity = this.config?.entity_packages_total || 'sensor.hca_hacs_packages_total';
+    const haVersionEntity = this.config?.entity_ha_version || 'sensor.hca_ha_version_current';
 
     // Collect data from all package sensors
     const results: HacsPackageResult[] = [];
-
     const allStates = this.hass?.states as Record<string, any> | undefined;
+
     for (const [entityId, entityState] of Object.entries(allStates ?? {})) {
       if (entityId.startsWith('sensor.hca_package_')) {
         const attrs = entityState.attributes || {};
@@ -124,9 +126,10 @@ export class HacsCompatibilityAuditorCard extends LitElement {
           repository_url: attrs.repository_url || '',
           ai_verdict: attrs.ai_verdict ?? null,
           ai_confidence: attrs.ai_confidence ?? null,
-          ai_reasoning: attrs.ai_reasoning ?? '',
-          ai_provider: attrs.ai_provider ?? '',
+          ai_reasoning: attrs.ai_reasoning || '',
+          ai_provider: attrs.ai_provider || '',
           ai_analysis: attrs.ai_analysis ?? null,
+          ai_categorizations: attrs.ai_categorizations ?? {},
         });
       }
     }
@@ -147,6 +150,11 @@ export class HacsCompatibilityAuditorCard extends LitElement {
       unknown_count: incompatibleState?.attributes?.unknown_count || 0,
       results,
       last_scan: incompatibleState?.attributes?.last_scan || '',
+      scan_in_progress: incompatibleState?.attributes?.scan_in_progress ?? false,
+      scan_progress: incompatibleState?.attributes?.scan_progress ?? 0,
+      scan_total: incompatibleState?.attributes?.scan_total ?? 0,
+      rules_enabled: incompatibleState?.attributes?.rules_enabled ?? false,
+      rules_loaded: incompatibleState?.attributes?.rules_loaded ?? false,
     };
 
     // Load ignored/reviewed from localStorage
@@ -276,6 +284,171 @@ export class HacsCompatibilityAuditorCard extends LitElement {
     window.open(url, '_blank');
   }
 
+  // ── Service Callers ────────────────────────────────────────────────────────
+
+  private async _checkPackage(entityId: string, repository: string): Promise<void> {
+    if (!this.hass || !entityId) return;
+    this._packageLoading.set(repository, true);
+    this.requestUpdate();
+    try {
+      await this.hass.callService(
+        'hacs_compatibility_auditor',
+        'check_package',
+        { entity_id: entityId },
+      );
+    } catch (e) {
+      console.error('check_package failed:', e);
+    } finally {
+      this._packageLoading.set(repository, false);
+      this.requestUpdate();
+    }
+  }
+
+  private async _aiAnalyzePackage(entityId: string, repository: string): Promise<void> {
+    if (!this.hass || !entityId) return;
+    this._packageAiLoading.set(repository, true);
+    this.requestUpdate();
+    try {
+      const result = await this.hass.callService(
+        'hacs_compatibility_auditor',
+        'ai_analyze_package',
+        { entity_id: entityId },
+        undefined,
+        undefined,
+        true,
+      );
+      if (result === undefined) {
+        console.warn('ai_analyze_package: service called, result unavailable');
+      } else if (!result.success) {
+        console.error('ai_analyze_package failed:', result.error);
+      }
+    } catch (e) {
+      console.error('ai_analyze_package failed:', e);
+    } finally {
+      this._packageAiLoading.set(repository, false);
+      this.requestUpdate();
+    }
+  }
+
+  private async _aiAnalyzeAll(): Promise<void> {
+    if (!this.hass) return;
+    this._aiAnalyzeAllRunning = true;
+    this.requestUpdate();
+    try {
+      const result = await this.hass.callService(
+        'hacs_compatibility_auditor',
+        'ai_analyze_all',
+        {},
+        undefined,
+        undefined,
+        true,
+      );
+      if (result === undefined) {
+        console.warn('ai_analyze_all: service called, result unavailable');
+      } else if (result.success) {
+        console.log(`AI analyzed ${result.analyzed}/${result.total} packages`);
+      } else {
+        console.error('ai_analyze_all failed:', result.error);
+      }
+    } catch (e) {
+      console.error('ai_analyze_all failed:', e);
+    } finally {
+      this._aiAnalyzeAllRunning = false;
+      this.requestUpdate();
+    }
+  }
+
+  private async _aiConfirmReport(entityId: string, repository: string, issueNumber?: number): Promise<void> {
+    if (!this.hass || !entityId) return;
+    try {
+      const data: Record<string, unknown> = { entity_id: entityId };
+      if (issueNumber) data.issue_number = issueNumber;
+
+      const result = await this.hass.callService(
+        'hacs_compatibility_auditor',
+        'ai_confirm_report',
+        data,
+        undefined,
+        undefined,
+        true,
+      );
+      if (result === undefined) {
+        console.warn('ai_confirm_report: service called, result unavailable');
+      } else if (result.success && result.issue_url) {
+        window.open(result.issue_url, '_blank');
+      } else {
+        console.error('ai_confirm_report failed:', result.error);
+      }
+    } catch (e) {
+      console.error('ai_confirm_report failed:', e);
+    }
+  }
+
+  private async _aiCategorizeIssue(repository: string, issueNumber: number): Promise<void> {
+    if (!this.hass) return;
+    try {
+      const result = await this.hass.callService(
+        'hacs_compatibility_auditor',
+        'ai_categorize_issue',
+        { repository, issue_number: issueNumber },
+        undefined,
+        undefined,
+        true,
+      );
+      if (result === undefined) {
+        console.warn('ai_categorize_issue: service called, result unavailable');
+      } else if (!result.success) {
+        console.error('ai_categorize_issue failed:', result.error);
+      }
+    } catch (e) {
+      console.error('ai_categorize_issue failed:', e);
+    }
+  }
+
+  private _getEntityIdForRepository(repository: string): string | null {
+    if (!this.hass) return null;
+    const slug = repository.replace(/\//g, '_').toLowerCase();
+    const entityId = `sensor.hca_package_${slug}`;
+    return this.hass.states[entityId] ? entityId : null;
+  }
+
+  private _getIssueCategorization(repository: string, issueUrl: string): IssueCategoryResult | null {
+    if (!this._data) return null;
+    const pkg = this._data.results.find((r) => r.repository === repository);
+    if (!pkg?.ai_categorizations) return null;
+    const match = issueUrl.match(/\/issues\/(\d+)/);
+    if (!match) return null;
+    return pkg.ai_categorizations[match[1]] ?? null;
+  }
+
+  private _getCategoryLabel(category: string): string {
+    const labels: Record<string, string> = {
+      true_positive: 'Verdadero positivo',
+      false_positive: 'Falso positivo',
+      config_issue: 'Problema de config',
+      feature_request: 'Petición de función',
+      unrelated: 'Sin relación',
+      uncertain: 'Incierto',
+    };
+    return labels[category] || category;
+  }
+
+  private _getRulesReportUrl(repository: string, issueNumber: number, category: string): string {
+    const rulesRepo = 'RmG152/hacs-compatibility-auditor';
+    const templates: Record<string, string> = {
+      false_positive: 'false_positive_report.yml',
+      true_positive: 'blacklist_request.yml',
+      config_issue: 'bug_report.yml',
+      feature_request: 'feature_request.yml',
+    };
+    const template = templates[category] || '';
+    const title = `[${category}] ${repository}#${issueNumber}`;
+    const body = `**Repository:** ${repository}\n**Issue #:** ${issueNumber}\n**Category:** ${category}\n\n`;
+    const params = new URLSearchParams({ title, body });
+    if (template) params.set('template', template);
+    return `https://github.com/${rulesRepo}/issues/new?${params.toString()}`;
+  }
+
   protected render(): TemplateResult {
     if (!this._data) {
       return html`
@@ -298,20 +471,44 @@ export class HacsCompatibilityAuditorCard extends LitElement {
           <div class="header-row">
             <h2>${this.config?.title || 'HACS Compatibility Auditor'}</h2>
             <div class="header-actions">
+              ${this.config?.show_ai_actions !== false ? html`
+                <ha-icon-button
+                  .label=${'Analizar todo con IA'}
+                  .disabled=${this._aiAnalyzeAllRunning || this._data?.scan_in_progress}
+                  @click=${this._aiAnalyzeAll}
+                >
+                  <ha-icon icon=${this._aiAnalyzeAllRunning ? 'mdi:loading' : 'mdi:robot-outline'}></ha-icon>
+                </ha-icon-button>
+              ` : ''}
               <ha-icon-button
                 .label=${'Forzar comprobación'}
+                .disabled=${this._data?.scan_in_progress}
                 @click=${this._forceCheck}
               >
                 <ha-icon icon="mdi:refresh"></ha-icon>
               </ha-icon-button>
             </div>
           </div>
+          ${this._data?.scan_in_progress ? this._renderScanProgress() : ''}
         </div>
 
         ${this.config?.show_summary ? this._renderSummary() : ''}
         ${this.config?.show_filters ? this._renderFilters() : ''}
         ${this._renderPackageList(filtered)}
       </ha-card>
+    `;
+  }
+
+  private _renderScanProgress(): TemplateResult {
+    const d = this._data!;
+    const pct = d.scan_total > 0 ? Math.round((d.scan_progress / d.scan_total) * 100) : 0;
+    return html`
+      <div class="scan-progress">
+        <div class="scan-progress-bar">
+          <div class="scan-progress-fill" style="width: ${pct}%"></div>
+        </div>
+        <span class="scan-progress-text">${d.scan_progress} / ${d.scan_total}</span>
+      </div>
     `;
   }
 
@@ -476,6 +673,12 @@ export class HacsCompatibilityAuditorCard extends LitElement {
   }
 
   private _renderPackageDetails(pkg: HacsPackageResult, isIgnored: boolean): TemplateResult {
+    const entityId = this._getEntityIdForRepository(pkg.repository);
+    const isRefreshing = this._packageLoading.get(pkg.repository) ?? false;
+    const isAiLoading = this._packageAiLoading.get(pkg.repository) ?? false;
+    const hasAiAnalysis = !!pkg.ai_verdict;
+    const showAiActions = this.config?.show_ai_actions !== false;
+
     return html`
       <div class="package-details" @click=${(e: Event) => e.stopPropagation()}>
         <div class="details-grid">
@@ -555,7 +758,7 @@ export class HacsCompatibilityAuditorCard extends LitElement {
           <div class="issues-section">
             <h4>Issues relevantes (${pkg.issues_relevant.length})</h4>
             <div class="issues-list">
-              ${pkg.issues_relevant.map(issue => this._renderIssueItem(issue))}
+              ${pkg.issues_relevant.map(issue => this._renderIssueItem(issue, pkg.repository))}
             </div>
           </div>
         ` : ''}
@@ -570,6 +773,39 @@ export class HacsCompatibilityAuditorCard extends LitElement {
             <ha-icon icon="mdi:github"></ha-icon>
             Repositorio
           </a>
+
+          ${entityId && showAiActions ? html`
+            <button
+              class="action-button"
+              .disabled=${isRefreshing}
+              @click=${() => this._checkPackage(entityId, pkg.repository)}
+            >
+              <ha-icon icon=${isRefreshing ? 'mdi:loading' : 'mdi:refresh'}></ha-icon>
+              ${isRefreshing ? 'Comprobando...' : 'Comprobar'}
+            </button>
+          ` : ''}
+
+          ${entityId && showAiActions ? html`
+            <button
+              class="action-button ai-button"
+              .disabled=${isAiLoading}
+              @click=${() => this._aiAnalyzePackage(entityId, pkg.repository)}
+            >
+              <ha-icon icon=${isAiLoading ? 'mdi:loading' : 'mdi:brain'}></ha-icon>
+              ${isAiLoading ? 'Analizando...' : 'Analizar con IA'}
+            </button>
+          ` : ''}
+
+          ${entityId && hasAiAnalysis && showAiActions ? html`
+            <button
+              class="action-button ai-confirm"
+              @click=${() => this._aiConfirmReport(entityId, pkg.repository)}
+            >
+              <ha-icon icon="mdi:check-decagram"></ha-icon>
+              Confirmar y reportar
+            </button>
+          ` : ''}
+
           ${!isIgnored ? html`
             <button
               class="action-button"
@@ -606,7 +842,12 @@ export class HacsCompatibilityAuditorCard extends LitElement {
     `;
   }
 
-  private _renderIssueItem(issue: GitHubIssue): TemplateResult {
+  private _renderIssueItem(issue: GitHubIssue, repository: string): TemplateResult {
+    const categorization = this._getIssueCategorization(repository, issue.url);
+    const showAiActions = this.config?.show_ai_actions !== false;
+    const issueNumberMatch = issue.url.match(/\/issues\/(\d+)/);
+    const issueNumber = issueNumberMatch ? parseInt(issueNumberMatch[1], 10) : 0;
+
     return html`
       <div class="issue-item">
         <div class="issue-header">
@@ -620,6 +861,38 @@ export class HacsCompatibilityAuditorCard extends LitElement {
             <span class="issue-label">${label}</span>
           `)}
         </div>
+        ${categorization ? html`
+          <div class="issue-ai-category">
+            <span class="issue-ai-badge ${categorization.category}">
+              ${this._getCategoryLabel(categorization.category)}
+            </span>
+            <span class="issue-ai-confidence">${Math.round(categorization.confidence * 100)}%</span>
+            ${issueNumber > 0 ? html`
+              <a
+                href=${this._getRulesReportUrl(repository, issueNumber, categorization.category)}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="action-button report-link"
+                title="Reportar a rules"
+                @click=${(e: Event) => e.stopPropagation()}
+              >
+                <ha-icon icon="mdi:github"></ha-icon>
+                Reportar a rules
+              </a>
+            ` : ''}
+          </div>
+        ` : showAiActions ? html`
+          <button
+            class="action-button issue-categorize"
+            @click=${(e: Event) => {
+              e.stopPropagation();
+              if (issueNumber > 0) this._aiCategorizeIssue(repository, issueNumber);
+            }}
+          >
+            <ha-icon icon="mdi:tag-outline"></ha-icon>
+            Categorizar con IA
+          </button>
+        ` : ''}
       </div>
     `;
   }
@@ -1108,6 +1381,145 @@ export class HacsCompatibilityAuditorCard extends LitElement {
       .ai-verdict-uncertain {
         color: var(--warning-color, #ff9800);
         font-weight: 600;
+      }
+
+      /* ── Scan Progress ──────────────────────────────────────────────────── */
+
+      .scan-progress {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 16px;
+      }
+
+      .scan-progress-bar {
+        flex: 1;
+        height: 4px;
+        background: var(--divider-color);
+        border-radius: 2px;
+        overflow: hidden;
+      }
+
+      .scan-progress-fill {
+        height: 100%;
+        background: var(--primary-color, #03a9f4);
+        border-radius: 2px;
+        transition: width 0.3s ease;
+      }
+
+      .scan-progress-text {
+        font-size: 0.75em;
+        opacity: 0.7;
+        white-space: nowrap;
+      }
+
+      /* ── AI Action Buttons ──────────────────────────────────────────────── */
+
+      .action-button.ai-button {
+        color: var(--primary-color, #03a9f4);
+        border-color: var(--primary-color, #03a9f4);
+      }
+
+      .action-button.ai-button:hover {
+        background: rgba(3, 169, 244, 0.08);
+      }
+
+      .action-button.ai-confirm {
+        color: var(--success-color, #4caf50);
+        border-color: var(--success-color, #4caf50);
+      }
+
+      .action-button.ai-confirm:hover {
+        background: rgba(76, 175, 80, 0.08);
+      }
+
+      .action-button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      /* ── Spin animation for loading icons ───────────────────────────────── */
+
+      @keyframes spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+
+      ha-icon[icon="mdi:loading"] {
+        animation: spin 1s linear infinite;
+      }
+
+      /* ── Issue AI Category ──────────────────────────────────────────────── */
+
+      .issue-ai-category {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 4px;
+      }
+
+      .issue-ai-badge {
+        font-size: 0.7em;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-weight: 500;
+      }
+
+      .issue-ai-badge.true_positive {
+        background: rgba(244, 67, 54, 0.15);
+        color: var(--error-color, #f44336);
+      }
+
+      .issue-ai-badge.false_positive {
+        background: rgba(76, 175, 80, 0.15);
+        color: var(--success-color, #4caf50);
+      }
+
+      .issue-ai-badge.config_issue {
+        background: rgba(255, 152, 0, 0.15);
+        color: var(--warning-color, #ff9800);
+      }
+
+      .issue-ai-badge.feature_request {
+        background: rgba(3, 169, 244, 0.15);
+        color: var(--primary-color, #03a9f4);
+      }
+
+      .issue-ai-badge.unrelated {
+        background: var(--divider-color);
+        color: var(--secondary-text-color);
+      }
+
+      .issue-ai-badge.uncertain {
+        background: rgba(255, 152, 0, 0.1);
+        color: var(--warning-color, #ff9800);
+      }
+
+      .issue-ai-confidence {
+        font-size: 0.7em;
+        opacity: 0.6;
+      }
+
+      .issue-categorize {
+        margin-top: 4px;
+        font-size: 0.75em;
+        padding: 2px 8px;
+      }
+
+      .report-link {
+        margin-left: auto;
+        font-size: 0.7em;
+        padding: 2px 8px;
+        color: var(--primary-color, #03a9f4);
+        border-color: var(--primary-color, #03a9f4);
+      }
+
+      .report-link:hover {
+        background: rgba(3, 169, 244, 0.08);
+      }
+
+      .issue-ai-category {
+        flex-wrap: wrap;
       }
     `;
   }
