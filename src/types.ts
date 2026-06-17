@@ -2,27 +2,30 @@
  * Type definitions for HACS Compatibility Auditor Card.
  */
 
-export interface HacsPackageResult {
-  name: string;
-  repository: string;
-  type: string;
-  installed_version: string;
-  latest_version: string;
-  compatible_with_current: boolean | null;
-  compatible_with_next: boolean | null;
-  status: 'compatible' | 'warning' | 'incompatible' | 'unknown' | 'ignored';
-  issues_relevant: GitHubIssue[];
-  manifest_ha_requirement: string;
-  last_checked: string;
-  error: string;
-  reason: string;
-  repository_url?: string;
-  ai_verdict: string | null;
-  ai_confidence: number | null;
-  ai_reasoning: string;
-  ai_provider: string;
-  ai_analysis: Record<string, any> | null;
-}
+// ── Enums ────────────────────────────────────────────────────────────────────
+
+export type PackageStatus = "compatible" | "warning" | "incompatible" | "unknown" | "ignored";
+
+export type PackageType = "integration" | "plugin" | "theme" | "appdaemon" | "netdaemon" | "python_script";
+
+export type AIVerdict = "affected" | "not_affected" | "uncertain";
+
+export type AICategory =
+  | "true_positive"
+  | "false_positive"
+  | "config_issue"
+  | "feature_request"
+  | "unrelated"
+  | "uncertain";
+
+export type AIAction = "add_false_positive" | "report_incompatibility";
+
+export type IssueTemplate = "false_positive_report.yml" | "blacklist_request.yml";
+
+export type FilterStatus = "all" | PackageStatus;
+export type FilterType = "all" | PackageType;
+
+// ── Core Data ────────────────────────────────────────────────────────────────
 
 export interface GitHubIssue {
   title: string;
@@ -32,6 +35,49 @@ export interface GitHubIssue {
   priority: number;
   updated_at: string;
 }
+
+export interface AIAnalysisResult {
+  verdict: AIVerdict | null;
+  reasoning: string;
+  confidence: number;
+  provider_used: string;
+  error: string;
+}
+
+export interface IssueCategoryResult {
+  category: AICategory;
+  confidence: number;
+  reasoning: string;
+  provider_used: string;
+  error: string;
+}
+
+// ── Package Result (from sensor attributes) ──────────────────────────────────
+
+export interface HacsPackageResult {
+  name: string;
+  repository: string;
+  type: string;
+  installed_version: string;
+  latest_version: string;
+  compatible_with_current: boolean | null;
+  compatible_with_next: boolean | null;
+  status: PackageStatus;
+  issues_relevant: GitHubIssue[];
+  manifest_ha_requirement: string;
+  last_checked: string;
+  error: string;
+  reason: string;
+  repository_url?: string;
+  ai_verdict: AIVerdict | null;
+  ai_confidence: number | null;
+  ai_reasoning: string;
+  ai_provider: string;
+  ai_analysis: AIAnalysisResult | null;
+  ai_categorizations: Record<string, IssueCategoryResult>;
+}
+
+// ── Global Data ──────────────────────────────────────────────────────────────
 
 export interface CompatibilityData {
   ha_current: string;
@@ -44,13 +90,17 @@ export interface CompatibilityData {
   unknown_count: number;
   results: HacsPackageResult[];
   last_scan: string;
+  scan_in_progress: boolean;
+  scan_progress: number;
+  scan_total: number;
+  rules_enabled: boolean;
+  rules_loaded: boolean;
 }
 
-export type FilterStatus = 'all' | 'compatible' | 'warning' | 'incompatible' | 'unknown';
-export type FilterType = 'all' | 'integration' | 'plugin' | 'theme' | 'appdaemon' | 'netdaemon' | 'python_script';
+// ── Card Config ──────────────────────────────────────────────────────────────
 
 export interface CardConfig {
-  type: 'custom:hacs-compatibility-auditor-card';
+  type: "custom:hacs-compatibility-auditor-card";
   entity_incompatible?: string;
   entity_packages_total?: string;
   entity_ha_version?: string;
@@ -59,14 +109,16 @@ export interface CardConfig {
   show_issues?: boolean;
   show_reason?: boolean;
   show_ai_indicator?: boolean;
+  show_ai_actions?: boolean;
   compact?: boolean;
   title?: string;
 }
 
-export interface LovelaceCardEditor {
-  hass?: HomeAssistant;
-  lovelace?: any;
-  setConfig(config: CardConfig): void;
+// ── HA Types ─────────────────────────────────────────────────────────────────
+
+export interface HomeAssistantState {
+  state: string;
+  attributes: Record<string, any>;
 }
 
 export interface HomeAssistant {
@@ -74,11 +126,20 @@ export interface HomeAssistant {
   callService(
     domain: string,
     service: string,
-    data?: Record<string, unknown>
-  ): Promise<void>;
+    data?: Record<string, unknown>,
+    target?: Record<string, unknown>,
+    notifyOnError?: boolean,
+    returnResponse?: boolean,
+  ): Promise<any>;
+  callApi(
+    method: string,
+    path: string,
+    data?: Record<string, unknown>,
+  ): Promise<any>;
 }
 
-export interface HomeAssistantState {
-  state: string;
-  attributes: Record<string, any>;
+export interface LovelaceCardEditor {
+  hass?: HomeAssistant;
+  lovelace?: any;
+  setConfig(config: CardConfig): void;
 }
